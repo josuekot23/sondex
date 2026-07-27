@@ -12,6 +12,7 @@ import psutil
 from datetime import datetime, timedelta
 import time
 import socket
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 ########################################################################
 # Definition des variables
@@ -26,7 +27,6 @@ with open("target.txt","r") as f:
 MQTT_HOST = config
 MQTT_PORT = 1883
 MQTT_KEEPALIVE_INTERVAL = 45
-MQTT_TOPIC = "logger"
 print(MQTT_HOST)
 #SITE="Brest"
 SITE=socket.gethostname()
@@ -77,7 +77,7 @@ logging.basicConfig(
 ########################################################################
 import glob
 
-BUFFER_DIR = "/home/logger/mqtt_buffer_mesures"
+BUFFER_DIR = f"/home/{SITE}/mqtt_buffer_mesures"
 MAX_LIGNES_PAR_FICHIER = 5000
 PREFIXE_FICHIER = "buffer_"
 
