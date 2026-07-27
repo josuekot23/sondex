@@ -225,7 +225,6 @@ while(True):
 
 
 
-
         # ligne de commande du programme de mesure
         cmd ="sudo dvbv5-scan DVB_ALL --output=output.scan"
 
