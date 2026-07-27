@@ -53,7 +53,7 @@ SCRIPT_SH="$DOSSIER/check_mesures.sh"
 # Rendre le script exécutable
 chmod +x "$SCRIPT_SH"
 # Ajout dans la crontab au démarrage
-CRON_JOB="***** && $SCRIPT_SH"
+CRON_JOB="* * * * * $SCRIPT_SH"
 (crontab -l 2>/dev/null | grep -v "$SCRIPT_SH"; echo "$CRON_JOB") | crontab -
 echo "Crontab configurée : check_mesures.sh sera lancé au démarrage."
 
@@ -62,7 +62,7 @@ SCRIPT_SH="$DOSSIER/check_mosquitto.sh"
 # Rendre le script exécutable
 chmod +x "$SCRIPT_SH"
 # Ajout dans la crontab au démarrage
-CRON_JOB="***** sudo $SCRIPT_SH"
+CRON_JOB="* * * * * sudo $SCRIPT_SH"
 (crontab -l 2>/dev/null | grep -v "$SCRIPT_SH"; echo "$CRON_JOB") | crontab -
 echo "Crontab configurée : check_mosquitto.sh sera lancé au démarrage."
 
@@ -71,6 +71,6 @@ SCRIPT_SH="$DOSSIER/check_temperature.sh"
 # Rendre le script exécutable
 chmod +x "$SCRIPT_SH"
 # Ajout dans la crontab au démarrage
-CRON_JOB="***** $SCRIPT_SH"
+CRON_JOB="* * * * *  $SCRIPT_SH"
 (crontab -l 2>/dev/null | grep -v "$SCRIPT_SH"; echo "$CRON_JOB") | crontab -
 echo "Crontab configurée : check_temperature.sh sera lancé au démarrage."
