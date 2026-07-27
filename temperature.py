@@ -15,8 +15,13 @@ import socket
 # Definition des variables
 ########################################################################
 
+#Recupération de l'IP du serveur
+with open("target.txt","r") as f:
+	config = f.read().strip()
+
+
 #Configuration MQTT
-MQTT_HOST = "10.1.2.78"
+MQTT_HOST = config
 MQTT_PORT = 1883
 MQTT_KEEPALIVE_INTERVAL = 45
 MQTT_TOPIC = "logger"
@@ -33,8 +38,9 @@ logging.basicConfig(
 # buffer local a rotation en cas de broker injoignable
 ########################################################################
 import glob
+DOSSIER = os.path.dirname(os.path.abspath(__file__))
 
-BUFFER_DIR = "/home/logger/mqtt_buffer_temperature"
+BUFFER_DIR = os.path.join(DOSSIER, "mqtt_buffer_mesures")
 MAX_LIGNES_PAR_FICHIER = 5000
 PREFIXE_FICHIER = "buffer_"
 
