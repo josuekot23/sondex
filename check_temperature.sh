@@ -1,6 +1,8 @@
-if ps -aux | grep temperatures.py | grep -v grep
-then 
+DOSSIER="$(cd "$(dirname "$0")" && pwd)"
+
+if ps -aux | grep "$DOSSIER/temperature.py" | grep -v grep
+then
     echo "En cours..."
 else
-    python /home/logger/temperature.py . &
+    "$DOSSIER/venv/bin/python" "$DOSSIER/temperature.py" &
 fi

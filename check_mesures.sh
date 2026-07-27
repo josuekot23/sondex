@@ -1,6 +1,11 @@
-if ps -aux | grep mesures.py | grep -v grep
-then 
+#!/bin/bash
+
+DOSSIER="$(cd "$(dirname "$0")" && pwd)"
+PYTHON_VENV="$DOSSIER/venv/bin/python"
+
+if ps -aux | grep "$DOSSIER/mesures.py" | grep -v grep > /dev/null
+then
     echo "En cours..."
 else
-    python /home/logger/mesures.py . &
+    "$PYTHON_VENV" "$DOSSIER/mesures.py" &
 fi
