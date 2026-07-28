@@ -74,3 +74,18 @@ chmod +x "$SCRIPT_SH"
 CRON_JOB="* * * * *  $SCRIPT_SH"
 (crontab -l 2>/dev/null | grep -v "$SCRIPT_SH"; echo "$CRON_JOB") | crontab -
 echo "Crontab configurée : check_temperature.sh sera lancé au démarrage."
+
+
+
+set -e
+echo "=== Installation des outils DVB ==="
+sudo apt update
+sudo apt install -y dvb-tools
+echo "=== Installation terminée ==="
+
+
+echo  "=== Autoriser check_mosquitto.sh ==="
+echo "$USER ALL=(ALL) NOPASSWD: $DOSSIER/check_mosquitto.sh" | \
+sudo tee /etc/sudoers.d/check_mosquitto > /dev/null
+
+sudo chmod 440 /etc/sudoers.d/check_mosquitto

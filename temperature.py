@@ -9,7 +9,7 @@ import signal
 import psutil
 import time
 import socket
-
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 ########################################################################
 # Definition des variables
