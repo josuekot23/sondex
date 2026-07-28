@@ -40,7 +40,7 @@ logging.basicConfig(
 import glob
 DOSSIER = os.path.dirname(os.path.abspath(__file__))
 
-BUFFER_DIR = os.path.join(DOSSIER, "mqtt_buffer_mesures")
+BUFFER_DIR = os.path.join(DOSSIER, "mqtt_buffer_temperature")
 MAX_LIGNES_PAR_FICHIER = 5000
 PREFIXE_FICHIER = "buffer_"
 
