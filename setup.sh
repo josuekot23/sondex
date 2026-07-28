@@ -89,3 +89,6 @@ echo "$USER ALL=(ALL) NOPASSWD: $DOSSIER/check_mosquitto.sh" | \
 sudo tee /etc/sudoers.d/check_mosquitto > /dev/null
 
 sudo chmod 440 /etc/sudoers.d/check_mosquitto
+
+echo "=== Redemarrage ==="
+reboot
