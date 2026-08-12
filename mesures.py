@@ -27,7 +27,7 @@ with open("target.txt","r") as f:
 MQTT_HOST = config
 MQTT_PORT = 1883
 MQTT_KEEPALIVE_INTERVAL = 45
-print(MQTT_HOST)
+# print(MQTT_HOST)
 #SITE="Brest"
 SITE=socket.gethostname()
 frequences = ["474000000","482000000","490000000","498000000","506000000","514000000","522000000","530000000","538000000","546000000","554000000","562000000","570000000","578000000","586000000","594000000","602000000","610000000","618000000","626000000","634000000","642000000","650000000","658000000","666000000","674000000","682000000","690000000"]
@@ -176,7 +176,7 @@ def envoyer_message(topic,data):
                 mqttc.publish(topic,data)
 
                 # ajout d'un message de log sur la console
-                logging.info('message envoyé:' + data)
+                # logging.info('message envoyé:' + data)
 
                 # deconnexion du broker MQTT
                 mqttc.disconnect()
@@ -252,7 +252,7 @@ while(True):
         #               time.sleep(600)
 
                         # message de log        
-                        logging.info('Fréquence sélectionnée : ' + freq )
+                        # logging.info('Fréquence sélectionnée : ' + freq )
 
                         # compteur  
                         cntNbLignesNonLock = 0
@@ -269,14 +269,14 @@ while(True):
                         for line in iter(p.stdout.readline, ''):
 
                                 # message de log
-                                logging.info('ligne en cours de traitement:' + line.rstrip())
+                                # logging.info('ligne en cours de traitement:' + line.rstrip())
 
                                 # si le programme renvoie une ligne avec les mots Quality et Signal
                                 if "Quality" in line and "Signal" in line:
 
                                         # la frequence est verouillee   
                                         freqIsLocked = True
-                                        logging.info('la fréquence est vérouillée')
+                                        # logging.info('la fréquence est vérouillée')
 
                                         line = line.replace("= ",":")
                                         line = line.replace("Lock   (0x1f) ","")
@@ -285,7 +285,7 @@ while(True):
 
                                         quality = mesures[0]
                                         qualityTab = quality.split(":")
-                                        logging.info(qualityTab[0])
+                                        # logging.info(qualityTab[0])
                                         qualityData = qualityTab[1] 
                                         #logging.info('Qualité du signal : ' + qualityData )
 
@@ -353,7 +353,7 @@ while(True):
                                 else:
                                         if "C/N" not in line and "Signal" in line and freqIsLocked == False:
 
-                                                logging.info('fréquence non vérouillée')
+                                                # logging.info('fréquence non vérouillée')
 
                                                 cntNbLignesNonLock = cntNbLignesNonLock +1
                                                 # Getting the current date and time
@@ -388,9 +388,9 @@ while(True):
 
 
                                         if "C/N" not in line and "Signal" in line and freqIsLocked == False and cntNbLignesNonLock == 2:
-                                            logging.info('Fréquence non vérouillée -> fin du process')
+                                        #     logging.info('Fréquence non vérouillée -> fin du process')
                                             current_process = psutil.Process()
                                             children = current_process.children(recursive=True)
                                             for child in reversed(children):
-                                                    logging.info('kill du process :  {}'.format(child.pid)) 
+                                                #     logging.info('kill du process :  {}'.format(child.pid)) 
                                                     os.system("sudo pkill -9 -P " + format(child.pid))
