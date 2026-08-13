@@ -7,6 +7,7 @@ import binascii
 import logging
 import signal
 import psutil
+import threading
 import time
 import socket
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -15,27 +16,36 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 # Definition des variables
 ########################################################################
 
-#Recupération de l'IP du serveur
-with open("target.txt","r") as f:
+# Recupération de l'IP du serveur
+with open("target.txt", "r") as f:
 	config = f.read().strip()
 
-
-#Configuration MQTT
+# Configuration MQTT
 MQTT_HOST = config
 MQTT_PORT = 1883
 MQTT_KEEPALIVE_INTERVAL = 45
 MQTT_TOPIC = "logger"
-SITE=socket.gethostname()
+SITE = socket.gethostname()
+
 ########################################################################
 # configuration des messages de logs
 ########################################################################
 logging.basicConfig(
-        format='%(asctime)s %(levelname)-8s %(message)s',
-        level=logging.INFO,
-        datefmt='%Y-%m-%d %H:%M:%S')
+	format='%(asctime)s %(levelname)-8s %(message)s',
+	level=logging.INFO,
+	datefmt='%Y-%m-%d %H:%M:%S')
 
 ########################################################################
 # buffer local a rotation en cas de broker injoignable
+#
+# Optimisations par rapport à la version d'origine :
+#  - compteur de lignes tenu en mémoire (plus de relecture complète du
+#    fichier courant à chaque mise en buffer)
+#  - verrou (_buffer_lock) protégeant l'accès concurrent aux fichiers
+#    de buffer, car le vidage tourne maintenant dans un thread séparé
+#    déclenché par la reconnexion
+#  - une ligne corrompue (JSON invalide) est écartée et archivée, elle
+#    ne bloque plus jamais les lignes valides qui suivent
 ########################################################################
 import glob
 DOSSIER = os.path.dirname(os.path.abspath(__file__))
@@ -46,133 +56,223 @@ PREFIXE_FICHIER = "buffer_"
 
 os.makedirs(BUFFER_DIR, exist_ok=True)
 
+_buffer_lock = threading.Lock()
+_fichier_courant = None
+_lignes_fichier_courant = 0
+
+
 def _fichiers_buffer_tries():
-        fichiers = glob.glob(os.path.join(BUFFER_DIR, PREFIXE_FICHIER + "*.jsonl"))
-        return sorted(fichiers)
+	# liste les fichiers de buffer dans l'ordre chronologique (le plus ancien d'abord)
+	fichiers = glob.glob(os.path.join(BUFFER_DIR, PREFIXE_FICHIER + "*.jsonl"))
+	return sorted(fichiers)
+
 
 def _nouveau_nom_fichier():
-        existants = _fichiers_buffer_tries()
-        if not existants:
-                n = 1
-        else:
-                dernier = os.path.basename(existants[-1])
-                num = int(dernier.replace(PREFIXE_FICHIER, "").replace(".jsonl", ""))
-                n = num + 1
-        return os.path.join(BUFFER_DIR, PREFIXE_FICHIER + str(n).zfill(8) + ".jsonl")
+	existants = _fichiers_buffer_tries()
+	if not existants:
+		n = 1
+	else:
+		dernier = os.path.basename(existants[-1])
+		num = int(dernier.replace(PREFIXE_FICHIER, "").replace(".jsonl", ""))
+		n = num + 1
+	return os.path.join(BUFFER_DIR, PREFIXE_FICHIER + str(n).zfill(8) + ".jsonl")
+
+
+def _init_compteur_buffer():
+	"""Lecture unique au démarrage pour initialiser le compteur en mémoire."""
+	global _fichier_courant, _lignes_fichier_courant
+	fichiers = _fichiers_buffer_tries()
+	if fichiers:
+		_fichier_courant = fichiers[-1]
+		with open(_fichier_courant, "r") as f:
+			_lignes_fichier_courant = sum(1 for _ in f)
+	else:
+		_fichier_courant = None
+		_lignes_fichier_courant = 0
+
 
 def _mettre_en_buffer(topic, data):
-        fichiers = _fichiers_buffer_tries()
+	global _fichier_courant, _lignes_fichier_courant
+	with _buffer_lock:
+		if _fichier_courant is None or _lignes_fichier_courant >= MAX_LIGNES_PAR_FICHIER:
+			_fichier_courant = _nouveau_nom_fichier()
+			_lignes_fichier_courant = 0
+			logging.warning('buffer plein ou inexistant, nouveau fichier créé : ' + _fichier_courant)
 
-        if fichiers:
-                fichier_courant = fichiers[-1]
-                with open(fichier_courant, "r") as f:
-                        nb_lignes = sum(1 for _ in f)
-        else:
-                fichier_courant = None
-                nb_lignes = MAX_LIGNES_PAR_FICHIER
+		with open(_fichier_courant, "a") as f:
+			f.write(json.dumps({"topic": topic, "data": data}) + "\n")
+		_lignes_fichier_courant += 1
 
-        if nb_lignes >= MAX_LIGNES_PAR_FICHIER:
-                fichier_courant = _nouveau_nom_fichier()
-                logging.warning('buffer plein, nouveau fichier cree : ' + fichier_courant)
+	total = sum(1 for fic in _fichiers_buffer_tries() for _ in open(fic))
+	logging.warning('broker injoignable, message mis en buffer local (' + str(total) + ' en attente au total)')
 
-        with open(fichier_courant, "a") as f:
-                f.write(json.dumps({"topic": topic, "data": data}) + "\n")
 
-        total = sum(1 for fic in _fichiers_buffer_tries() for _ in open(fic))
-        logging.warning('broker injoignable, message mis en buffer local (' + str(total) + ' en attente au total)')
+def _vider_buffer():
+	"""Rejoue les messages en attente. Appelé uniquement depuis le callback on_connect
+	(thread dédié), plus à chaque envoi de message."""
+	global _fichier_courant, _lignes_fichier_courant
+	with _buffer_lock:
+		fichiers = _fichiers_buffer_tries()
+		if not fichiers:
+			return
 
-def _vider_buffer(mqttc):
-        fichiers = _fichiers_buffer_tries()
-        if not fichiers:
-                return
+		total_rejoues = 0
+		total_corrompues = 0
+		fichier_corrompues = os.path.join(BUFFER_DIR, "corrompues.jsonl")
 
-        total_rejoues = 0
-        for fichier in fichiers:
-                with open(fichier, "r") as f:
-                        lignes = [l for l in f.read().splitlines() if l.strip()]
+		for fichier in fichiers:
+			with open(fichier, "r") as f:
+				lignes = [l for l in f.read().splitlines() if l.strip()]
 
-                restantes = []
-                echec = False
-                for i, l in enumerate(lignes):
-                        if echec:
-                                restantes.append(l)
-                                continue
-                        try:
-                                msg = json.loads(l)
-                                mqttc.publish(msg["topic"], msg["data"])
-                                total_rejoues += 1
-                        except Exception:
-                                echec = True
-                                restantes.append(l)
+			restantes = []
+			echec = False
+			for l in lignes:
+				if echec or not mqtt_connected:
+					restantes.append(l)
+					continue
 
-                if restantes:
-                        with open(fichier, "w") as f:
-                                f.write("\n".join(restantes) + "\n")
-                else:
-                        os.remove(fichier)
+				# 1) parsing : une ligne illisible (JSON invalide, écriture
+				# coupée par un kill -9 ou un redémarrage en plein milieu...)
+				# est écartée définitivement et archivée à part. Elle ne doit
+				# JAMAIS empêcher les lignes valides qui suivent de partir.
+				try:
+					msg = json.loads(l)
+				except Exception as e:
+					total_corrompues += 1
+					logging.error('ligne de buffer corrompue, ignorée : ' + str(e))
+					try:
+						with open(fichier_corrompues, "a") as fc:
+							fc.write(l + "\n")
+					except Exception:
+						pass
+					continue
 
-                if echec:
-                        break
+				# 2) envoi : là un échec est un vrai problème réseau/broker,
+				# on arrête le vidage et on préserve cette ligne + tout le reste
+				try:
+					info = mqttc.publish(msg["topic"], msg["data"], qos=1)
+					if info.rc != mqtt.MQTT_ERR_SUCCESS:
+						raise Exception("publish rc=" + str(info.rc))
+					total_rejoues += 1
+				except Exception:
+					echec = True
+					restantes.append(l)
 
-        if total_rejoues:
-                logging.info('buffer local : ' + str(total_rejoues) + ' messages rejoués en rafale')
+			if restantes:
+				with open(fichier, "w") as f:
+					f.write("\n".join(restantes) + "\n")
+			else:
+				os.remove(fichier)
+
+			if fichier == _fichier_courant:
+				_lignes_fichier_courant = len(restantes)
+
+			if echec:
+				break
+
+		if total_rejoues:
+			logging.info('buffer local : ' + str(total_rejoues) + ' messages rejoués en rafale')
+		if total_corrompues:
+			logging.warning('buffer local : ' + str(total_corrompues) + ' ligne(s) corrompue(s) ignorée(s), archivées dans corrompues.jsonl')
+
 
 ########################################################################
-# fonction d'envoi des messages MQTT
+# connexion MQTT persistante
+#
+# Un seul client, connecté une fois au démarrage, avec un thread réseau
+# géré par paho (loop_start) qui prend en charge la reconnexion
+# automatique (reconnect_delay_set). Le vidage du buffer n'est déclenché
+# qu'au moment où la connexion est (re)établie, via on_connect.
 ########################################################################
-def envoyer_message(topic,data):
-        try:
-                # initialisation du client MQTT
-                mqttc = mqtt.Client()
+mqttc = None
+mqtt_connected = False
 
-                # connexion au broker MQTT
-                mqttc.connect(MQTT_HOST, MQTT_PORT, MQTT_KEEPALIVE_INTERVAL)
 
-                # on rejoue d'abord les messages en attente depuis une eventuelle coupure
-                _vider_buffer(mqttc)
+def on_connect(client, userdata, flags, rc):
+	global mqtt_connected
+	if rc == 0:
+		mqtt_connected = True
+		logging.info('connecté au broker MQTT (' + MQTT_HOST + ')')
+		threading.Thread(target=_vider_buffer, daemon=True).start()
+	else:
+		mqtt_connected = False
+		logging.error('échec de connexion au broker MQTT, code ' + str(rc))
 
-                # publication du message
-                mqttc.publish(topic,data)
 
-                # ajout d'un message de log sur la console
-                logging.info('message envoyé:' + data)
-                # deconnexion du broker MQTT
-                mqttc.disconnect()
-        except Exception as e:
-                logging.error('échec envoi MQTT (broker injoignable ?) : ' + str(e))
-                _mettre_en_buffer(topic, data)
+def on_disconnect(client, userdata, rc):
+	global mqtt_connected
+	mqtt_connected = False
+	if rc != 0:
+		logging.warning('déconnexion inattendue du broker MQTT (rc=' + str(rc) + '), reconnexion automatique en cours')
 
+
+def init_mqtt():
+	global mqttc
+	_init_compteur_buffer()
+	mqttc = mqtt.Client()
+	mqttc.on_connect = on_connect
+	mqttc.on_disconnect = on_disconnect
+	mqttc.reconnect_delay_set(min_delay=1, max_delay=30)
+	# connect_async() (et non connect()) : ne bloque pas et ne lève pas
+	# d'exception si le broker est injoignable. La tentative (et les
+	# retentatives suivantes, avec le backoff de reconnect_delay_set)
+	# sont déléguées au thread réseau démarré par loop_start(), y compris
+	# pour le tout premier essai — important au boot du Pi si le réseau
+	# n'est pas encore up.
+	try:
+		mqttc.connect_async(MQTT_HOST, MQTT_PORT, MQTT_KEEPALIVE_INTERVAL)
+	except Exception as e:
+		logging.error('échec de préparation de la connexion MQTT (' + str(e) + ')')
+	mqttc.loop_start()
+
+
+def envoyer_message(topic, data):
+	"""Publie directement si connecté (QoS 1), sinon met en buffer local.
+	Ne tente plus une connexion par message et ne rejoue plus le buffer
+	à chaque appel : c'est on_connect qui s'en charge."""
+	if mqtt_connected:
+		try:
+			info = mqttc.publish(topic, data, qos=1)
+			if info.rc != mqtt.MQTT_ERR_SUCCESS:
+				raise Exception("publish rc=" + str(info.rc))
+			logging.info('message envoyé:' + data)
+		except Exception as e:
+			logging.error('échec publication MQTT (' + str(e) + '), mise en buffer')
+			_mettre_en_buffer(topic, data)
+	else:
+		_mettre_en_buffer(topic, data)
 
 
 ###################################################################################
 # Début du programme
 ###################################################################################
 logging.info('Début du programme de mesure')
+init_mqtt()
 
-while(True):
+while (True):
 
-        # temporisation
-        time.sleep(3)
+	# temporisation
+	time.sleep(3)
 
-        # ligne de commande du programme de mesure
-        cmd ="vcgencmd measure_temp"
+	# ligne de commande du programme de mesure
+	cmd = "vcgencmd measure_temp"
 
-        # execution de la commande au niveau du systeme d exploitation
-        p = subprocess.Popen(cmd,shell=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,encoding='utf8')
+	# execution de la commande au niveau du systeme d exploitation
+	p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf8')
 
-        # lecture de la sortie standard 
-        for line in iter(p.stdout.readline, ''):
-             # message de log
-                logging.info('ligne en cours de traitement:' + line.rstrip())
+	# lecture de la sortie standard
+	for line in iter(p.stdout.readline, ''):
+		# message de log
+		logging.info('ligne en cours de traitement:' + line.rstrip())
 
-                # recuperation de la temperature
-                line = line.strip()
-                line = line.replace("temp=","")
-                line = line.replace("'C","")
+		# recuperation de la temperature
+		line = line.strip()
+		line = line.replace("temp=", "")
+		line = line.replace("'C", "")
 
-                # timestamp de la mesure (nanosecondes)
-                sts = str(time.time_ns())
+		# timestamp de la mesure (nanosecondes)
+		sts = str(time.time_ns())
 
-                # envoi de l information
-                mqtt_msg="{\"site\":\""+SITE+"\", \"temperature\":"+line+", \"timestamp\":\""+sts+"\"}"
-                envoyer_message("temperature",mqtt_msg)
+		# envoi de l information
+		mqtt_msg = "{\"site\":\"" + SITE + "\", \"temperature\":" + line + ", \"timestamp\":\"" + sts + "\"}"
+		envoyer_message("temperature", mqtt_msg)
