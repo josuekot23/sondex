@@ -8,9 +8,19 @@ import logging
 import signal
 import psutil
 import threading
+import random
 import time
 import socket
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+# Lissage du vidage du buffer : utile quand plusieurs Raspberry Pi se
+# reconnectent en même temps après une panne serveur commune (ex: 15
+# sondes qui vident chacune un backlog de plusieurs milliers de messages
+# à la même seconde).
+VIDAGE_PAUSE_SECONDES = 0.02        # pause "lente" (petits backlogs, ou fin de purge) : ~50 msg/s
+VIDAGE_PAUSE_RAPIDE_SECONDES = 0.002 # pause "rapide" (gros backlogs, ex: panne de plusieurs semaines) : ~500 msg/s
+VIDAGE_SEUIL_ACCELERATION = 2000    # en dessous de ce nombre de messages restants, on repasse en pause lente
+VIDAGE_JITTER_MAX_SECONDES = 30   # délai aléatoire avant de démarrer le vidage, différent par Pi
 
 ########################################################################
 # Definition des variables
@@ -107,6 +117,14 @@ def _mettre_en_buffer(topic, data):
 	logging.warning('broker injoignable, message mis en buffer local (' + str(total) + ' en attente au total)')
 
 
+def _compter_total_buffer(fichiers):
+	total = 0
+	for fic in fichiers:
+		with open(fic) as f:
+			total += sum(1 for _ in f)
+	return total
+
+
 def _vider_buffer():
 	"""Rejoue les messages en attente. Appelé uniquement depuis le callback on_connect
 	(thread dédié), plus à chaque envoi de message."""
@@ -115,6 +133,10 @@ def _vider_buffer():
 		fichiers = _fichiers_buffer_tries()
 		if not fichiers:
 			return
+
+		total_restant = _compter_total_buffer(fichiers)
+		if total_restant > VIDAGE_SEUIL_ACCELERATION:
+			logging.info('vidage : ' + str(total_restant) + ' message(s) en attente, mode rapide activé')
 
 		total_rejoues = 0
 		total_corrompues = 0
@@ -154,6 +176,9 @@ def _vider_buffer():
 					if info.rc != mqtt.MQTT_ERR_SUCCESS:
 						raise Exception("publish rc=" + str(info.rc))
 					total_rejoues += 1
+					total_restant -= 1
+					pause = VIDAGE_PAUSE_SECONDES if total_restant <= VIDAGE_SEUIL_ACCELERATION else VIDAGE_PAUSE_RAPIDE_SECONDES
+					time.sleep(pause)
 				except Exception:
 					echec = True
 					restantes.append(l)
@@ -188,12 +213,24 @@ mqttc = None
 mqtt_connected = False
 
 
+def _vider_buffer_differe():
+	"""Attend un délai aléatoire avant de vider le buffer. Utile quand
+	plusieurs Pi se reconnectent au même instant (panne serveur commune) :
+	ça étale les vidages sur une fenêtre de temps au lieu de tout envoyer
+	en même temps sur le broker et sur la chaîne d'écriture derrière
+	(Node-RED -> InfluxDB)."""
+	delai = random.uniform(0, VIDAGE_JITTER_MAX_SECONDES)
+	logging.info('vidage du buffer programmé dans ' + str(round(delai, 1)) + 's')
+	time.sleep(delai)
+	_vider_buffer()
+
+
 def on_connect(client, userdata, flags, rc):
 	global mqtt_connected
 	if rc == 0:
 		mqtt_connected = True
 		logging.info('connecté au broker MQTT (' + MQTT_HOST + ')')
-		threading.Thread(target=_vider_buffer, daemon=True).start()
+		threading.Thread(target=_vider_buffer_differe, daemon=True).start()
 	else:
 		mqtt_connected = False
 		logging.error('échec de connexion au broker MQTT, code ' + str(rc))
