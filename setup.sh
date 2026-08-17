@@ -90,5 +90,8 @@ sudo tee /etc/sudoers.d/check_mosquitto > /dev/null
 
 sudo chmod 440 /etc/sudoers.d/check_mosquitto
 
+# Rpi-connect-lite
+sudo apt install rpi-connect-lite
+
 echo "=== Redemarrage ==="
 reboot
