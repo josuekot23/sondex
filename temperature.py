@@ -52,7 +52,7 @@ MQTT_PORT = 8883
 MQTT_KEEPALIVE_INTERVAL = 45
 MQTT_TOPIC = "logger"
 SITE = socket.gethostname()
-MQTT_USERNAME = SITE
+MQTT_USERNAME = "sonde-" + SITE
 MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD")
 MQTT_CA_CERT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ca.crt")
 
