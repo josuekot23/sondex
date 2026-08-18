@@ -30,12 +30,31 @@ VIDAGE_JITTER_MAX_SECONDES = 30   # délai aléatoire avant de démarrer le vida
 with open("target.txt", "r") as f:
 	config = f.read().strip()
 
+
+def _charger_env(fichier):
+	"""Charge les variables KEY=VALUE d'un fichier .env dans os.environ.
+	Utilisé pour ne jamais avoir le mot de passe MQTT en dur dans le code
+	ni commité dans Git."""
+	if os.path.exists(fichier):
+		with open(fichier) as f:
+			for ligne in f:
+				ligne = ligne.strip()
+				if "=" in ligne and not ligne.startswith("#"):
+					k, v = ligne.split("=", 1)
+					os.environ[k.strip()] = v.strip()
+
+
+_charger_env(os.path.join(os.path.dirname(os.path.abspath(__file__)), "mqtt_credentials.env"))
+
 # Configuration MQTT
 MQTT_HOST = config
-MQTT_PORT = 1883
+MQTT_PORT = 8883
 MQTT_KEEPALIVE_INTERVAL = 45
 MQTT_TOPIC = "logger"
 SITE = socket.gethostname()
+MQTT_USERNAME = SITE
+MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD")
+MQTT_CA_CERT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ca.crt")
 
 ########################################################################
 # configuration des messages de logs
@@ -247,6 +266,10 @@ def init_mqtt():
 	global mqttc
 	_init_compteur_buffer()
 	mqttc = mqtt.Client()
+	if not MQTT_PASSWORD:
+		logging.error('MQTT_PASSWORD manquant (mqtt_credentials.env introuvable ou vide) : la connexion va échouer')
+	mqttc.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+	mqttc.tls_set(ca_certs=MQTT_CA_CERT)
 	mqttc.on_connect = on_connect
 	mqttc.on_disconnect = on_disconnect
 	mqttc.reconnect_delay_set(min_delay=1, max_delay=30)
